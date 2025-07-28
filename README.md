@@ -1,1 +1,3 @@
-# target_pose_estimation
+# target_pose_estimation  
+使用椭圆检测来识别靶标上的圆或圆环标记，对于不同靶标具有泛化意义。  
+使用特殊规则对每一个识别点进行排序，对于不同靶标没有泛化意义。
