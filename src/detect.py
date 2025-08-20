@@ -11,7 +11,6 @@ import ED
 import ES
 import EC
 import ellipse_cluster
-import matlab.engine
 
 '''
 processing说明：

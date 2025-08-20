@@ -1,16 +1,9 @@
 import cv2 as cv
 import numpy as np
 import canny_detect 
-import edge_detect
-import random
 import math
 import draw
-import scipy
-import sys
 import ED
-import ES
-import EC
-import ellipse_cluster
 import argparse
 #f1:判断弧段的首尾是否相近
 def arcs_h_e(e):
@@ -44,6 +37,7 @@ def get_inlner_points(ell,e):
     for p in e:
         x = p[0]
         y = p[1]
+        if ell[2]== 0 or ell[3] == 0:continue
         F = ((x*math.cos(ell[4])-ell[0]*math.cos(ell[4])+y*math.sin(ell[4])-ell[1]*math.sin(ell[4])))**2/(ell[2]**2)+((-x*math.sin(ell[4])+ell[0]*math.sin(ell[4])+y*math.cos(ell[4])-ell[1]*math.cos(ell[4])))**2/(ell[3]**2)
         if abs(F-1)<0.1:
             num +=1
@@ -237,20 +231,23 @@ def intersection(start1, end1, start2, end2):
                 ans = [x1 + t1 * (x2 - x1), y1 + t1 * (y2 - y1)]
 
         return ans
+
+
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="只修改图片编号")
     parser.add_argument("--img_id", type=str, required=True, help="图片编号，如 8 表示使用 8.jpg")
     args = parser.parse_args()
 
     # 构造完整文件路径
-    filename = rf"..\img_test\{args.img_id}.jpg"
+    filename = rf"..\img_test\{args.img_id}.png"
+    #filename = r"..\img_test\5616.png"
     print(f"加载图像: {filename}")
     img = cv.imread(filename)
     #提取图像中黑色的部分
     hsv = cv.cvtColor(img, cv.COLOR_BGR2HSV)
     # 定义黑色的 HSV 范围
     lower_black = np.array([0, 0, 0])
-    upper_black = np.array([180, 255, 120])  # 调整 V 值以扩大/缩小范围
+    upper_black = np.array([180, 255, 150])  # 调整 V 值以改变范围
     # 创建掩码
     mask = cv.inRange(hsv, lower_black, upper_black)
     cv.imwrite(f"..\\img_of_process\\black_mask.png",mask)
@@ -267,14 +264,20 @@ if __name__ == "__main__":
     canvas5 = 255*np.ones_like(img)
     canvas6 = 255*np.ones_like(img)
     canvas7 = 255*np.ones_like(img)
-    _iminlength = 150
+    _iminlength = 50
     contours = ED.find_contours(canny,_iminlength)
     draw.draw_arcs(canvas6,contours)
     cv.imwrite(f"..\\img_of_process\\contours.png",canvas6)
     cv.imwrite(f"..\\img_of_process\\canny.png",canny)
     #过滤掉没有首尾链接的弧段
+    #过滤掉一些短线段
+    _MinOrientedRectSide = 10
     arcs1 = []
     for e in contours:
+        rect = cv.minAreaRect(np.array(e))
+        o_min = min(rect[1][0],rect[1][1])
+        if(o_min < _MinOrientedRectSide):
+            continue
         p1 = e[0]
         p2 = e[len(e)-1]
         if arcs_h_e(e):
@@ -296,17 +299,82 @@ if __name__ == "__main__":
         #print(f"评价: {R_jude}")
         if R_jude<0.8:continue
         ells.append(ell)
+    ell_center = []
+    ell_cluster = []
     for i,ell in enumerate(ells):
         #print(f"ell: {ell}")
         if ell ==None:continue
         cv.ellipse(img,(int(ell[0]),int(ell[1])),(int(ell[2]),int(ell[3])),ell[4]/math.pi*180,0,360,(255,100,0),2)
         cv.circle(img,(int(ell[0]),int(ell[1])),3,(0,0,255),-1)
-    cv.imwrite("..\\img_of_process\\ans.png",img)
+        ell_center.append((ell[0],ell[1]))
+    #增加一步，排除掉靶标周围其他椭圆的干扰
+    dis_min = 10000 #这个后面可以调整为图像的长宽相关参数
+    for i,ci in enumerate(ell_center):
+        for j,cj in enumerate(ell_center):
+            if i==j:continue
+            dis = math.sqrt((ci[0]-cj[0])**2+(ci[1]-cj[1])**2)
+            if dis<50:continue
+            if dis<dis_min:
+                dis_min = dis
+    print(f"dis_min: {dis_min}")
+    dis_jude = 6*dis_min
+    cv.imwrite("..\\img_of_process\\ellipses.png",img)
+    while ell_center:
+        c0 = ell_center.pop()
+        ell_cluster.append([c0])
+        to_remove = []
+        for i,ci in enumerate(ell_center):
+            label = 1
+            num = 0
+            while label:
+                for j,cj in enumerate(ell_cluster):
+                    #判断圆心距离是否足够近
+                    dis_min = 2048
+                    for c in cj:
+                        dis = math.sqrt((ci[0]-c[0])**2+(ci[1]-c[1])**2)
+                        if dis<dis_min:
+                            dis_min = dis
+                    print(f"dis: {dis_min}")
+                    if dis_min<dis_jude:
+                        label = 0
+                        cj.append(ci)
+                        to_remove.append(ci)
+                        break
+                    else:
+                        num +=1 
+                if label and num == len(ell_cluster):
+                    to_remove.append(ci)
+                    ell_cluster.append([ci])
+                    label = 0
+        for i in to_remove:
+            ell_center.remove(i)
+
+
+    out1 = []
+    max_len = 0
+    for i in ell_cluster:
+        print(f"cluster: {i}")
+        if len(i)>max_len:
+            out1 = i
+            max_len = len(i)
+    print(f"out1: {out1}")
+    ells2 = []
+    for i,ell in enumerate(ells):
+        #print(f"ell: {ell}")
+        if ell ==None:continue
+        if (ell[0],ell[1]) not in out1:
+            print(f"here: {i}")
+            continue
+        ells2.append(ell)
+        cv.ellipse(img,(int(ell[0]),int(ell[1])),(int(ell[2]),int(ell[3])),ell[4]/math.pi*180,0,360,(0,255,0),2)
+        cv.circle(img,(int(ell[0]),int(ell[1])),3,(0,0,255),-1)
+        ell_center.append((ell[0],ell[1]))
+    cv.imwrite("..\\img_of_process\\ellipses_after_cluster.png",img)
     #区分出是圆还是圆环
     circle = []
     cirque = []
     #
-    for e in ells:
+    for e in ells2:
         m = get_ellipse_mask_mean(mask,e)
         #print(f"椭圆内对应的掩码值： {m}")
         if m<15:
@@ -317,13 +385,14 @@ if __name__ == "__main__":
     for i,ell in enumerate(circle):
         #print(f"ell: {ell}")
         if ell ==None:continue
-        cv.ellipse(img,(int(ell[0]),int(ell[1])),(int(ell[2]),int(ell[3])),ell[4]/math.pi*180,0,360,(255,100,0),2)
+        cv.ellipse(img,(int(ell[0]),int(ell[1])),(int(ell[2]),int(ell[3])),ell[4]/math.pi*180,0,360,(255,0,255),2)
         cv.circle(img,(int(ell[0]),int(ell[1])),3,(0,0,255),-1)
     for i,ell in enumerate(cirque):
         #print(f"ell: {ell}")
         if ell ==None:continue
         cv.ellipse(img,(int(ell[0]),int(ell[1])),(int(ell[2]),int(ell[3])),ell[4]/math.pi*180,0,360,(0,100,255),2)
         cv.circle(img,(int(ell[0]),int(ell[1])),3,(0,0,255),-1)
+    cv.imwrite("..\\img_of_process\\circles_and_cirquets.png",img)
     
     #计算得到，聚类之后的中心
     circle_center = []
@@ -424,8 +493,8 @@ if __name__ == "__main__":
         cv.line(img,(int(idx1c[0]),int(idx1c[1])),(int(idx3c[0]),int(idx3c[1])),(0,0,255),2)
         #判断射线和线段有没有交点
         if has_intersection(circle_center[0],circle_center[1],idx1c,idx3c) or has_intersection(circle_center[0],circle_center[1],idx3c,idx1c):
-            L1 = i
-            cirquet.remove(i)
+            L1 = i    
+    cirquet.remove(L1)
     L2 = cirquet[0]
     for i in range(0,7):
         if i in L1:continue
@@ -547,7 +616,9 @@ if __name__ == "__main__":
                 fontScale=4,
                 color=(0, 255, 0),
                 thickness=3)
-    print(f"cirque: {cirque_center}")
+    print(f"circle: {circle_center}\ncirque: {cirque_center}")
     cv.imwrite(f"..\\img_of_process\\ans_{args.img_id}.png",img)
+    cv.imshow("ans",img)
+    cv.waitKey()
     print("over")
     #cv.imshow("org",canny)
